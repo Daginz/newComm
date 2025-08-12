@@ -132,11 +132,10 @@ export async function getChatsByUserId({
 
 export async function getChatById({ id }: { id: string }) {
   try {
-    const [selectedChat] = await db.select().from(chat).where(eq(chat.id, id)).$withCache();
+    const [selectedChat] = await db.select().from(chat).where(eq(chat.id, id));
     return selectedChat;
   } catch (error) {
-    console.log('Error getting chat by id', error);
-    return null;
+    throw new ChatSDKError('bad_request:database', 'Failed to get chat by id');
   }
 }
 
@@ -181,8 +180,6 @@ export async function getMessagesByChatId({
   limit?: number;
   offset?: number;
 }) {
-  'use cache';
-
   try {
     return await db
       .select()

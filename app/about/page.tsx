@@ -41,6 +41,7 @@ import {
 } from '@/components/ui/navigation-menu';
 
 import { ThemeSwitcher } from '@/components/theme-switcher';
+import { SciraLogo } from '@/components/logos/scira-logo';
 
 export default function AboutPage() {
   const router = useRouter();
@@ -106,7 +107,6 @@ export default function AboutPage() {
           </Alert>
         </div>
       )}
-
       {/* Terms Dialog */}
       <Dialog open={showTermsDialog} onOpenChange={setShowTermsDialog}>
         <DialogContent className="sm:max-w-[500px] p-0 bg-background border border-border">
@@ -173,7 +173,6 @@ export default function AboutPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
       {/* Navigation */}
       <header className="sticky top-0 z-50 backdrop-blur-lg bg-background/80 border-b border-border/50">
         <div className="container max-w-7xl mx-auto px-4">
@@ -181,14 +180,7 @@ export default function AboutPage() {
             {/* Logo */}
             <Link href="/" className="flex items-center gap-3 group">
               <div className="relative">
-                <Image
-                  src="/scira.png"
-                  alt="Scira"
-                  width={100}
-                  height={100}
-                  className="size-8 invert dark:invert-0 transition-transform group-hover:scale-110"
-                  quality={100}
-                />
+                <SciraLogo className="size-8 transition-transform group-hover:scale-110" />
               </div>
               <span className="text-xl font-bold tracking-tight">Scira</span>
             </Link>
@@ -197,22 +189,22 @@ export default function AboutPage() {
             <NavigationMenu className="hidden md:flex">
               <NavigationMenuList>
                 <NavigationMenuItem>
-                  <Link href="/" legacyBehavior passHref>
+                  <Link href="/" passHref>
                     <NavigationMenuLink className={navigationMenuTriggerStyle()}>Search</NavigationMenuLink>
                   </Link>
                 </NavigationMenuItem>
                 <NavigationMenuItem>
-                  <Link href="/pricing" legacyBehavior passHref>
+                  <Link href="/pricing" passHref>
                     <NavigationMenuLink className={navigationMenuTriggerStyle()}>Pricing</NavigationMenuLink>
                   </Link>
                 </NavigationMenuItem>
                 <NavigationMenuItem>
-                  <Link href="/terms" legacyBehavior passHref>
+                  <Link href="/terms" passHref>
                     <NavigationMenuLink className={navigationMenuTriggerStyle()}>Terms</NavigationMenuLink>
                   </Link>
                 </NavigationMenuItem>
                 <NavigationMenuItem>
-                  <Link href="/privacy-policy" legacyBehavior passHref>
+                  <Link href="/privacy-policy" passHref>
                     <NavigationMenuLink className={navigationMenuTriggerStyle()}>Privacy</NavigationMenuLink>
                   </Link>
                 </NavigationMenuItem>
@@ -254,20 +246,12 @@ export default function AboutPage() {
           </div>
         </div>
       </header>
-
       {/* Hero Section */}
       <section className="py-24 px-4">
         <div className="container max-w-4xl mx-auto text-center space-y-12">
           <div className="space-y-6">
             <div className="flex items-center justify-center gap-3 mb-8">
-              <Image
-                src="/scira.png"
-                alt="Scira"
-                width={100}
-                height={100}
-                className="size-12 invert dark:invert-0"
-                quality={100}
-              />
+              <SciraLogo className="size-12" />
               <h1 className="text-4xl font-bold">Scira</h1>
             </div>
 
@@ -327,7 +311,6 @@ export default function AboutPage() {
           </div>
         </div>
       </section>
-
       {/* Stats Section */}
       <section className="py-16 px-4 border-y border-border">
         <div className="container max-w-4xl mx-auto">
@@ -353,7 +336,6 @@ export default function AboutPage() {
           </div>
         </div>
       </section>
-
       {/* Awards Section */}
       <section className="py-16 px-4">
         <div className="container max-w-4xl mx-auto">
@@ -410,7 +392,6 @@ export default function AboutPage() {
           </div>
         </div>
       </section>
-
       {/* Features Section */}
       <section className="py-20 px-4 bg-muted/30">
         <div className="container max-w-6xl mx-auto">
@@ -464,7 +445,6 @@ export default function AboutPage() {
           </div>
         </div>
       </section>
-
       {/* Technology Stack */}
       <section className="py-20 px-4">
         <div className="container max-w-6xl mx-auto">
@@ -502,7 +482,6 @@ export default function AboutPage() {
           </div>
         </div>
       </section>
-
       {/* Featured on Vercel Section */}
       <section className="py-16 px-4 border-y border-border">
         <div className="container max-w-6xl mx-auto">
@@ -529,7 +508,6 @@ export default function AboutPage() {
           </div>
         </div>
       </section>
-
       {/* Models Section */}
       <section className="py-20 px-4 bg-muted/30">
         <div className="container max-w-6xl mx-auto">
@@ -577,7 +555,7 @@ export default function AboutPage() {
                               Vision
                             </Badge>
                           )}
-                          {model.reasoning && (
+                          {model.reasoningText && (
                             <Badge variant="outline" className="text-xs">
                               Reasoning
                             </Badge>
@@ -597,7 +575,6 @@ export default function AboutPage() {
           </div>
         </div>
       </section>
-
       {/* Pricing Section */}
       <section className="py-20 px-4">
         <div className="container max-w-4xl mx-auto">
@@ -737,7 +714,6 @@ export default function AboutPage() {
           </div>
         </div>
       </section>
-
       {/* FAQ Section */}
       <section className="py-20 px-4 bg-muted/30">
         <div className="container max-w-4xl mx-auto">
@@ -806,13 +782,12 @@ export default function AboutPage() {
           </div>
         </div>
       </section>
-
       {/* Footer */}
       <footer className="border-t border-border py-12 px-4">
         <div className="container max-w-6xl mx-auto">
           <div className="flex flex-col md:flex-row items-center justify-between gap-6">
             <div className="flex items-center gap-3">
-              <Image src="/scira.png" alt="Scira" width={32} height={32} className="h-8 w-8 invert dark:invert-0" />
+              <SciraLogo className="size-8" />
               <p className="text-sm text-muted-foreground">© {new Date().getFullYear()} Scira. All rights reserved.</p>
             </div>
 

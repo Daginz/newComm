@@ -2,7 +2,6 @@
 // /components/ui/form-component.tsx
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ChatRequestOptions, CreateMessage, Message } from 'ai';
 import { toast } from 'sonner';
 import { Button } from '../ui/button';
 import { Textarea } from '../ui/textarea';
@@ -19,7 +18,7 @@ import { X, Check, ChevronsUpDown } from 'lucide-react';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { cn, SearchGroup, SearchGroupId, searchGroups } from '@/lib/utils';
 import { Upload } from 'lucide-react';
-import { UIMessage } from '@ai-sdk/ui-utils';
+import { UIMessage } from 'ai';
 import { track } from '@vercel/analytics';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { ComprehensiveUserData } from '@/hooks/use-user-data';
@@ -37,14 +36,16 @@ import {
 } from '@hugeicons/core-free-icons';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { UseChatHelpers } from '@ai-sdk/react';
+import { ChatMessage } from '@/lib/types';
 
 interface ModelSwitcherProps {
   selectedModel: string;
   setSelectedModel: (value: string) => void;
   className?: string;
   attachments: Array<Attachment>;
-  messages: Array<Message>;
-  status: 'submitted' | 'streaming' | 'ready' | 'error';
+  messages: Array<UIMessage>;
+  status: UseChatHelpers<ChatMessage>['status'];
   onModelSelect?: (model: (typeof models)[0]) => void;
   subscriptionData?: any;
   user?: ComprehensiveUserData | null;
@@ -81,18 +82,60 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = React.memo(
     const hasAttachments = useMemo(
       () =>
         attachments.length > 0 ||
-        messages.some((msg) => msg.experimental_attachments && msg.experimental_attachments.length > 0),
+        messages.some(
+          (msg) =>
+            msg.parts?.filter((part) => part.type === 'file') &&
+            msg.parts?.filter((part) => part.type === 'file').length > 0,
+        ),
       [attachments.length, messages],
     );
 
-    const filteredModels = useMemo(
-      () => (hasAttachments ? availableModels.filter((model) => model.vision) : availableModels),
-      [hasAttachments, availableModels],
-    );
+    const isFilePart = useCallback((p: unknown): p is { type: 'file'; mediaType?: string } => {
+      return typeof p === 'object' && p !== null && 'type' in (p as Record<string, unknown>) &&
+        (p as { type: unknown }).type === 'file';
+    }, []);
+
+    const hasImageAttachments = useMemo(() => {
+      const attachmentHasImage = attachments.some((att) => {
+        const ct = att.contentType || att.mediaType || '';
+        return ct.startsWith('image/');
+      });
+      const messagesHaveImage = messages.some((msg) =>
+        (msg.parts || []).some((part) => isFilePart(part) && typeof part.mediaType === 'string' && part.mediaType.startsWith('image/')),
+      );
+      return attachmentHasImage || messagesHaveImage;
+    }, [attachments, messages, isFilePart]);
+
+    const hasPdfAttachments = useMemo(() => {
+      const attachmentHasPdf = attachments.some((att) => {
+        const ct = att.contentType || att.mediaType || '';
+        return ct === 'application/pdf';
+      });
+      const messagesHavePdf = messages.some((msg) =>
+        (msg.parts || []).some((part) => isFilePart(part) && typeof part.mediaType === 'string' && part.mediaType === 'application/pdf'),
+      );
+      return attachmentHasPdf || messagesHavePdf;
+    }, [attachments, messages, isFilePart]);
+
+    const filteredModels = useMemo(() => {
+      if (!hasImageAttachments && !hasPdfAttachments) {
+        return availableModels;
+      }
+      if (hasImageAttachments && hasPdfAttachments) {
+        return availableModels.filter((model) => model.vision && model.pdf);
+      }
+      if (hasImageAttachments) {
+        return availableModels.filter((model) => model.vision);
+      }
+      // Only PDFs attached
+      return availableModels.filter((model) => model.pdf);
+    }, [availableModels, hasImageAttachments, hasPdfAttachments]);
+
+    const sortedModels = useMemo(() => filteredModels, [filteredModels]);
 
     const groupedModels = useMemo(
       () =>
-        filteredModels.reduce(
+        sortedModels.reduce(
           (acc, model) => {
             const category = model.category;
             if (!acc[category]) {
@@ -103,8 +146,15 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = React.memo(
           },
           {} as Record<string, typeof availableModels>,
         ),
-      [filteredModels],
+      [sortedModels],
     );
+
+    const orderedGroupEntries = useMemo(() => {
+      const groupOrder = ['Mini', 'Pro', 'Experimental'];
+      return groupOrder
+        .filter((category) => groupedModels[category] && groupedModels[category].length > 0)
+        .map((category) => [category, groupedModels[category]] as const);
+    }, [groupedModels]);
 
     const currentModel = useMemo(
       () => availableModels.find((m) => m.value === selectedModel),
@@ -204,7 +254,7 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = React.memo(
               <CommandInput placeholder="Search models..." className="h-9" />
               <CommandEmpty>No model found.</CommandEmpty>
               <CommandList className="max-h-[15em]">
-                {Object.entries(groupedModels).map(([category, categoryModels], categoryIndex) => (
+                {orderedGroupEntries.map(([category, categoryModels], categoryIndex) => (
                   <CommandGroup key={category}>
                     {categoryIndex > 0 && <div className="my-1 border-t border-border" />}
                     <div className="px-2 py-1 text-[10px] font-medium text-muted-foreground">{category} Models</div>
@@ -471,7 +521,8 @@ ModelSwitcher.displayName = 'ModelSwitcher';
 
 interface Attachment {
   name: string;
-  contentType: string;
+  contentType?: string;
+  mediaType?: string;
   url: string;
   size: number;
 }
@@ -714,20 +765,11 @@ interface FormComponentProps {
   chatId: string;
   user: ComprehensiveUserData | null;
   subscriptionData?: any;
-  handleSubmit: (
-    event?: {
-      preventDefault?: () => void;
-    },
-    chatRequestOptions?: ChatRequestOptions,
-  ) => void;
   fileInputRef: React.RefObject<HTMLInputElement>;
   inputRef: React.RefObject<HTMLTextAreaElement>;
   stop: () => void;
   messages: Array<UIMessage>;
-  append: (
-    message: Message | CreateMessage,
-    chatRequestOptions?: ChatRequestOptions,
-  ) => Promise<string | null | undefined>;
+  sendMessage: UseChatHelpers<ChatMessage>['sendMessage'];
   selectedModel: string;
   setSelectedModel: (value: string) => void;
   resetSuggestedQuestions: () => void;
@@ -735,7 +777,7 @@ interface FormComponentProps {
   selectedGroup: SearchGroupId;
   setSelectedGroup: React.Dispatch<React.SetStateAction<SearchGroupId>>;
   showExperimentalModels: boolean;
-  status: 'submitted' | 'streaming' | 'ready' | 'error';
+  status: UseChatHelpers<ChatMessage>['status'];
   setHasSubmitted: React.Dispatch<React.SetStateAction<boolean>>;
   isLimitBlocked?: boolean;
 }
@@ -743,7 +785,7 @@ interface FormComponentProps {
 interface GroupSelectorProps {
   selectedGroup: SearchGroupId;
   onGroupSelect: (group: SearchGroup) => void;
-  status: 'submitted' | 'streaming' | 'ready' | 'error';
+  status: UseChatHelpers<ChatMessage>['status'];
 }
 
 const GroupModeToggle: React.FC<GroupSelectorProps> = React.memo(({ selectedGroup, onGroupSelect, status }) => {
@@ -783,16 +825,6 @@ const GroupModeToggle: React.FC<GroupSelectorProps> = React.memo(({ selectedGrou
       }
     }
   }, [isExtreme, onGroupSelect]);
-
-  const handleGroupChange = useCallback(
-    (value: string) => {
-      const group = visibleGroups.find((g) => g.id === value);
-      if (group) {
-        onGroupSelect(group);
-      }
-    },
-    [visibleGroups, onGroupSelect],
-  );
 
   return (
     <div className="flex items-center">
@@ -944,7 +976,7 @@ const FormComponent: React.FC<FormComponentProps> = ({
   setInput,
   attachments,
   setAttachments,
-  handleSubmit,
+  sendMessage,
   fileInputRef,
   inputRef,
   stop,
@@ -1055,8 +1087,53 @@ const FormComponent: React.FC<FormComponentProps> = ({
       cleanupMediaRecorder();
     } else {
       try {
+        // Environment and feature checks
+        if (typeof window === 'undefined') {
+          toast.error('Voice recording is only available in the browser.');
+          return;
+        }
+
+        if (!navigator.mediaDevices?.getUserMedia) {
+          toast.error('Voice recording is not supported in this browser.');
+          return;
+        }
+
+        // Best-effort permissions hint (not supported in all browsers)
+        try {
+          const permApi: any = (navigator as any).permissions;
+          if (permApi?.query) {
+            const status = await permApi.query({ name: 'microphone' as any });
+            if (status?.state === 'denied') {
+              toast.error('Microphone access is denied. Enable it in your browser settings.');
+              return;
+            }
+          }
+        } catch {
+          // Ignore permissions API errors; proceed to request directly
+        }
+
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const recorder = new MediaRecorder(stream);
+
+        // Pick a supported MIME type to maximize cross-browser compatibility (e.g., Safari)
+        const candidateMimeTypes = [
+          'audio/webm;codecs=opus',
+          'audio/webm',
+          'audio/mp4;codecs=mp4a.40.2',
+          'audio/mp4',
+          'audio/ogg;codecs=opus',
+          'audio/mpeg',
+        ];
+        const isTypeSupported = (type: string) =>
+          typeof MediaRecorder !== 'undefined' && (MediaRecorder as any).isTypeSupported?.(type);
+        const selectedMimeType = candidateMimeTypes.find((t) => isTypeSupported(t));
+
+        let recorder: MediaRecorder;
+        try {
+          recorder = selectedMimeType ? new MediaRecorder(stream, { mimeType: selectedMimeType }) : new MediaRecorder(stream);
+        } catch (e) {
+          // Fallback: try without options
+          recorder = new MediaRecorder(stream);
+        }
         mediaRecorderRef.current = recorder;
 
         recorder.addEventListener('dataavailable', async (event) => {
@@ -1065,7 +1142,14 @@ const FormComponent: React.FC<FormComponentProps> = ({
 
             try {
               const formData = new FormData();
-              formData.append('audio', audioBlob, 'recording.webm');
+              const extension = (() => {
+                const type = (audioBlob?.type || '').toLowerCase();
+                if (type.includes('mp4')) return 'mp4';
+                if (type.includes('ogg')) return 'ogg';
+                if (type.includes('mpeg')) return 'mp3';
+                return 'webm';
+              })();
+              formData.append('audio', audioBlob, `recording.${extension}`);
               const response = await fetch('/api/transcribe', {
                 method: 'POST',
                 body: formData,
@@ -1084,10 +1168,17 @@ const FormComponent: React.FC<FormComponentProps> = ({
               }
             } catch (error) {
               console.error('Error during transcription request:', error);
+              toast.error('Failed to transcribe audio. Please try again.');
             } finally {
               cleanupMediaRecorder();
             }
           }
+        });
+
+        recorder.addEventListener('error', (e) => {
+          console.error('MediaRecorder error:', e);
+          toast.error('Recording failed. Please try again or switch browser.');
+          cleanupMediaRecorder();
         });
 
         recorder.addEventListener('stop', () => {
@@ -1098,6 +1189,7 @@ const FormComponent: React.FC<FormComponentProps> = ({
         setIsRecording(true);
       } catch (error) {
         console.error('Error accessing microphone:', error);
+        toast.error('Could not access microphone. Please allow mic permission.');
         setIsRecording(false);
       }
     }
@@ -1709,10 +1801,23 @@ const FormComponent: React.FC<FormComponentProps> = ({
         setHasSubmitted(true);
         lastSubmittedQueryRef.current = input.trim();
 
-        handleSubmit(event, {
-          experimental_attachments: attachments,
+        sendMessage({
+          role: 'user',
+          parts: [
+            ...attachments.map((attachment) => ({
+              type: 'file' as const,
+              url: attachment.url,
+              name: attachment.name,
+              mediaType: attachment.contentType || attachment.mediaType || '',
+            })),
+            {
+              type: 'text',
+              text: input,
+            },
+          ],
         });
 
+        setInput('');
         setAttachments([]);
         if (fileInputRef.current) {
           fileInputRef.current.value = '';
@@ -1724,7 +1829,7 @@ const FormComponent: React.FC<FormComponentProps> = ({
     [
       input,
       attachments,
-      handleSubmit,
+      sendMessage,
       setAttachments,
       fileInputRef,
       lastSubmittedQueryRef,
@@ -1811,14 +1916,14 @@ const FormComponent: React.FC<FormComponentProps> = ({
   }, [input, debouncedResize]);
 
   return (
-    <div className={cn('flex flex-col w-full bg-background max-w-2xl mx-auto')}>
+    <div className={cn('flex flex-col w-full max-w-2xl mx-auto')}>
       <TooltipProvider>
         <div
           className={cn(
             'relative w-full flex flex-col gap-1 rounded-lg transition-all duration-300 font-sans!',
             hasInteracted ? 'z-51' : '',
             isDragging && 'ring-1 ring-border',
-            // attachments.length > 0 || uploadQueue.length > 0 ? 'bg-muted/70 p-1' : 'bg-transparent',
+            attachments.length > 0 || uploadQueue.length > 0 ? 'bg-muted/50 p-1' : 'bg-transparent',
           )}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
@@ -2022,8 +2127,10 @@ const FormComponent: React.FC<FormComponentProps> = ({
                   {hasVisionSupport(selectedModel) && (
                     <Tooltip delayDuration={300}>
                       <TooltipTrigger asChild>
-                        <button
-                          className="group rounded-lg p-1.75 h-8 w-8 border border-border bg-background text-foreground hover:bg-accent transition-colors duration-200"
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="group rounded-full transition-colors duration-200 !size-8 border-0 !shadow-none hover:!bg-primary/30 hover:!border-0"
                           onClick={(event) => {
                             event.preventDefault();
                             event.stopPropagation();
@@ -2033,7 +2140,7 @@ const FormComponent: React.FC<FormComponentProps> = ({
                           <span className="block">
                             <HugeiconsIcon icon={DocumentAttachmentIcon} size={16} />
                           </span>
-                        </button>
+                        </Button>
                       </TooltipTrigger>
                       <TooltipContent
                         side="bottom"
@@ -2053,8 +2160,10 @@ const FormComponent: React.FC<FormComponentProps> = ({
                   {isProcessing ? (
                     <Tooltip delayDuration={300}>
                       <TooltipTrigger asChild>
-                        <button
-                          className="group rounded-lg p-1.75 h-8 w-8 border border-destructive bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors duration-200"
+                        <Button
+                          variant="destructive"
+                          size="icon"
+                          className="group rounded-full transition-colors duration-200 !size-8"
                           onClick={(event) => {
                             event.preventDefault();
                             event.stopPropagation();
@@ -2062,9 +2171,9 @@ const FormComponent: React.FC<FormComponentProps> = ({
                           }}
                         >
                           <span className="block">
-                            <StopIcon size={16} />
+                            <StopIcon size={14} />
                           </span>
-                        </button>
+                        </Button>
                       </TooltipTrigger>
                       <TooltipContent
                         side="bottom"
@@ -2076,14 +2185,13 @@ const FormComponent: React.FC<FormComponentProps> = ({
                     </Tooltip>
                   ) : input.length === 0 && attachments.length === 0 ? (
                     /* Show Voice Recording Button when no input */
-                    <Tooltip delayDuration={300}>
+                    (<Tooltip delayDuration={300}>
                       <TooltipTrigger asChild>
-                        <button
+                        <Button
+                          size="icon"
+                          variant={isRecording ? 'destructive' : 'default'}
                           className={cn(
-                            'group rounded-lg p-1.5 size-7.5 transition-colors duration-200',
-                            isRecording
-                              ? 'border border-destructive bg-destructive text-destructive-foreground hover:bg-destructive/90'
-                              : 'border border-primary bg-primary text-primary-foreground hover:bg-primary/90',
+                            'group rounded-full m-auto transition-colors duration-200 !size-8',
                           )}
                           onClick={(event) => {
                             event.preventDefault();
@@ -2094,7 +2202,7 @@ const FormComponent: React.FC<FormComponentProps> = ({
                           <span className="block">
                             <HugeiconsIcon icon={AiMicIcon} size={16} color="currentColor" strokeWidth={1.5} />
                           </span>
-                        </button>
+                        </Button>
                       </TooltipTrigger>
                       <TooltipContent
                         side="bottom"
@@ -2110,13 +2218,14 @@ const FormComponent: React.FC<FormComponentProps> = ({
                           </span>
                         </div>
                       </TooltipContent>
-                    </Tooltip>
+                    </Tooltip>)
                   ) : (
                     /* Show Send Button when there is input */
-                    <Tooltip delayDuration={300}>
+                    (<Tooltip delayDuration={300}>
                       <TooltipTrigger asChild>
-                        <button
-                          className="group rounded-lg flex p-1.75 m-auto h-8 w-8 border border-primary bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-primary transition-colors duration-200"
+                        <Button
+                          size="icon"
+                          className="group rounded-full flex m-auto transition-colors duration-200 !size-8"
                           onClick={(event) => {
                             event.preventDefault();
                             event.stopPropagation();
@@ -2133,7 +2242,7 @@ const FormComponent: React.FC<FormComponentProps> = ({
                           <span className="block">
                             <ArrowUpIcon size={16} />
                           </span>
-                        </button>
+                        </Button>
                       </TooltipTrigger>
                       <TooltipContent
                         side="bottom"
@@ -2142,7 +2251,7 @@ const FormComponent: React.FC<FormComponentProps> = ({
                       >
                         <span className="font-medium text-[11px]">Send Message</span>
                       </TooltipContent>
-                    </Tooltip>
+                    </Tooltip>)
                   )}
                 </div>
               </div>

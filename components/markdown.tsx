@@ -19,6 +19,7 @@ import { toast } from 'sonner';
 
 interface MarkdownRendererProps {
   content: string;
+  isUserMessage?: boolean;
 }
 
 interface CitationLink {
@@ -106,7 +107,7 @@ const preprocessLaTeX = (content: string) => {
   return content;
 };
 
-const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) => {
+const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, isUserMessage = false }) => {
   const [processedContent, extractedCitations, latexBlocks] = useMemo(() => {
     const citations: CitationLink[] = [];
 
@@ -580,7 +581,6 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) => {
       inlinePattern.lastIndex = 0;
 
       // Process the text to replace placeholders with LaTeX components
-      let processedText = text;
       const components: any[] = [];
       let lastEnd = 0;
 
@@ -656,6 +656,9 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) => {
 
       return components.length === 1 ? components[0] : <Fragment key={generateKey()}>{components}</Fragment>;
     },
+    hr() {
+      return <div />;
+    },
     paragraph(children) {
       // Check if the paragraph contains only a LaTeX block placeholder
       if (typeof children === 'string') {
@@ -682,7 +685,7 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) => {
       }
 
       return (
-        <p key={generateKey()} className="my-5 leading-relaxed text-foreground">
+        <p key={generateKey()} className={`${isUserMessage ? 'leading-relaxed text-foreground !m-0' : ''} my-5 leading-relaxed text-foreground`}>
           {children}
         </p>
       );
@@ -701,6 +704,21 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) => {
       return <InlineCode key={generateKey()} code={codeString} />;
     },
     link(href, text) {
+      // For user messages, display links as plain text with URL
+      if (isUserMessage) {
+        const linkText = typeof text === 'string' ? text : href;
+        // If link text and href are different, show both
+        if (linkText !== href && linkText !== '') {
+          return (
+            <span key={generateKey()} className="break-all">
+              {linkText} ({href})
+            </span>
+          );
+        }
+        // Otherwise just show the URL
+        return <span key={generateKey()} className="break-all">{href}</span>;
+      }
+
       let citationIndex = citationLinks.findIndex((link) => link.link === href);
       if (citationIndex !== -1) {
         // For citations, show the citation text in the hover card
@@ -818,7 +836,7 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) => {
   };
 
   return (
-    <div className="mt-3 markdown-body prose prose-neutral dark:prose-invert max-w-none text-foreground font-sans">
+    <div className="markdown-body prose prose-neutral dark:prose-invert max-w-none text-foreground font-sans">
       <Marked renderer={renderer}>{processedContent}</Marked>
     </div>
   );

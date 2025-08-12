@@ -4,7 +4,8 @@
 import { geolocation } from '@vercel/functions';
 import { serverEnv } from '@/env/server';
 import { SearchGroupId } from '@/lib/utils';
-import { generateObject, UIMessage, generateText } from 'ai';
+import { generateObject, UIMessage, generateText, generateId } from 'ai';
+import type { CoreMessage, ModelMessage } from 'ai';
 import { z } from 'zod';
 import { getUser } from '@/lib/auth-utils';
 import { scira } from '@/ai/providers';
@@ -33,7 +34,7 @@ import {
   deleteLookout,
 } from '@/lib/db/queries';
 import { getDiscountConfig } from '@/lib/discount';
-import { groq } from '@ai-sdk/groq';
+import { GroqProviderOptions, groq } from '@ai-sdk/groq';
 import { Client } from '@upstash/qstash';
 // Removed old subscription imports - now using unified user data approach
 import { usageCountCache, createMessageCountKey, createExtremeCountKey } from '@/lib/performance-cache';
@@ -54,9 +55,9 @@ export async function suggestQuestions(history: any[]) {
   console.log(history);
 
   const { object } = await generateObject({
-    model: scira.languageModel('scira-nano'),
+    model: scira.languageModel('scira-grok-3'),
     temperature: 0,
-    maxTokens: 512,
+    maxOutputTokens: 512,
     system: `You are a search engine follow up query/questions generator. You MUST create EXACTLY 3 questions for the search engine based on the message history.
 
 ### Question Generation Guidelines:
@@ -103,18 +104,20 @@ export async function suggestQuestions(history: any[]) {
   };
 }
 
-export async function checkImageModeration(images: any) {
+export async function checkImageModeration(images: string[]) {
+  const messages: ModelMessage[] = images.map((image) => ({
+    role: 'user',
+    content: [{ type: 'image', image: image }],
+  }));
+
   const { text } = await generateText({
     model: groq('meta-llama/llama-guard-4-12b'),
-    messages: [
-      {
-        role: 'user',
-        content: images.map((image: any) => ({
-          type: 'image',
-          image: image,
-        })),
+    messages,
+    providerOptions: {
+      groq: {
+        service_tier: 'flex',
       },
-    ],
+    },
   });
   return text;
 }
@@ -129,6 +132,11 @@ export async function generateTitleFromUserMessage({ message }: { message: UIMes
     - the title should creative and unique
     - do not use quotes or colons`,
     prompt: JSON.stringify(message),
+    providerOptions: {
+      groq: {
+        service_tier: 'flex',
+      },
+    },
   });
 
   return title;
@@ -179,24 +187,6 @@ export async function generateSpeech(text: string) {
   };
 }
 
-export async function fetchMetadata(url: string) {
-  try {
-    const response = await fetch(url, { next: { revalidate: 3600 } }); // Cache for 1 hour
-    const html = await response.text();
-
-    const titleMatch = html.match(/<title>(.*?)<\/title>/i);
-    const descMatch = html.match(/<meta\s+name=["']description["']\s+content=["'](.*?)["']/i);
-
-    const title = titleMatch ? titleMatch[1] : '';
-    const description = descMatch ? descMatch[1] : '';
-
-    return { title, description };
-  } catch (error) {
-    console.error('Error fetching metadata:', error);
-    return null;
-  }
-}
-
 // Map deprecated 'buddy' group ID to 'memory' for backward compatibility
 type LegacyGroupId = SearchGroupId | 'buddy';
 
@@ -204,6 +194,7 @@ const groupTools = {
   web: [
     'web_search',
     'greeting',
+    'code_interpreter',
     'get_weather_data',
     'retrieve',
     'text_translate',
@@ -219,7 +210,7 @@ const groupTools = {
   academic: ['academic_search', 'code_interpreter', 'datetime'] as const,
   youtube: ['youtube_search', 'datetime'] as const,
   reddit: ['reddit_search', 'datetime'] as const,
-  analysis: ['code_interpreter', 'stock_chart', 'currency_converter', 'datetime'] as const,
+  stocks: ['stock_chart', 'currency_converter', 'datetime'] as const,
   crypto: ['coin_data', 'coin_ohlc', 'coin_data_by_contract', 'datetime'] as const,
   chat: [] as const,
   extreme: ['extreme_search'] as const,
@@ -247,11 +238,86 @@ const groupInstructions = {
   - NEVER preface your answer with your interpretation of the user's query
   - GO STRAIGHT TO ANSWERING the question after running the tool
 
-  ### Tool-Specific Guidelines:
+  1. Response Guidelines:
+     - Responses must be informative, long and very detailed which address the question's answer straight forward
+     - Maintain the language of the user's message and do not change it
+     - Use structured answers with markdown format and tables too
+     - never mention yourself in the response the user is here for answers and not for you
+     - First give the question's answer straight forward and then start with markdown format
+     - NEVER begin responses with phrases like "According to my search" or "Based on the information I found"
+     - ⚠️ CITATIONS ARE MANDATORY - Every factual claim must have a citation
+     - Citations MUST be placed immediately after the sentence containing the information
+     - NEVER group citations at the end of paragraphs or the response
+     - Each distinct piece of information requires its own citation
+     - Never say "according to [Source]" or similar phrases - integrate citations naturally
+     - ⚠️ CRITICAL: Absolutely NO section or heading named "Additional Resources", "Further Reading", "Useful Links", "External Links", "References", "Citations", "Sources", "Bibliography", "Works Cited", or anything similar is allowed. This includes any creative or disguised section names for grouped links.
+     - STRICTLY FORBIDDEN: Any list, bullet points, or group of links, regardless of heading or formatting, is not allowed. Every link must be a citation within a sentence.
+     - NEVER say things like "You can learn more here [link]" or "See this article [link]" - every link must be a citation for a specific claim
+     - Citation format: [Source Title](URL) - use descriptive source titles
+     - For multiple sources supporting one claim, use format: [Source 1](URL1) [Source 2](URL2)
+     - Cite the most relevant results that answer the question
+     - Never use the hr tag in the response even in markdown format!
+     - Avoid citing irrelevant results or generic information
+     - When citing statistics or data, always include the year when available
+     - Code blocks should be formatted using the 'code' markdown syntax and should always contain the code and not response text unless requested by the user
+
+     GOOD CITATION EXAMPLE:
+     Large language models (LLMs) are neural networks trained on vast text corpora to generate human-like text [Large language model - Wikipedia](https://en.wikipedia.org/wiki/Large_language_model). They use transformer architectures [LLM Architecture Guide](https://example.com/architecture) and are fine-tuned for specific tasks [Training Guide](https://example.com/training).
+
+     BAD CITATION EXAMPLE (DO NOT DO THIS):
+     This explanation is based on the latest understanding and research on LLMs, including their architecture, training, and text generation mechanisms as of 2024 [Large language model - Wikipedia](https://en.wikipedia.org/wiki/Large_language_model) [How LLMs Work](https://example.com/how) [Training Guide](https://example.com/training) [Architecture Guide](https://example.com/architecture).
+
+     BAD LINK USAGE (DO NOT DO THIS):
+     LLMs are powerful language models. You can learn more about them here [Link]. For detailed information about training, check out this article [Link]. See this guide for architecture details [Link].
+
+     ⚠️ ABSOLUTELY FORBIDDEN (NEVER WRITE IN THIS FORMAT):
+     ## Further Reading and Official Documentation
+     - [xAI Docs: Overview](https://docs.x.ai/docs/overview)
+     - [Grok 3 Beta — The Age of Reasoning Agents](https://x.ai/news/grok-3)
+     - [Grok 3 API Documentation](https://api.x.ai/docs)
+     - [Beginner's Guide to Grok 3](https://example.com/guide)
+     - [TechCrunch - API Launch Article](https://example.com/launch)
+
+     ⚠️ ABSOLUTELY FORBIDDEN (NEVER DO THIS):
+     Content explaining the topic...
+
+     ANY of these sections are forbidden:
+     References:
+     [Source 1](URL1)
+
+     Citations:
+     [Source 2](URL2)
+
+     Sources:
+     [Source 3](URL3)
+
+     Bibliography:
+     [Source 4](URL4)
+
+  2. Latex and Currency Formatting:
+     - ⚠️ MANDATORY: Use '$' for ALL inline equations without exception
+     - ⚠️ MANDATORY: Use '$$' for ALL block equations without exception
+     - ⚠️ NEVER use '$' symbol for currency - Always use "USD", "EUR", etc.
+     - Tables must use plain text without any formatting
+     - Mathematical expressions must always be properly delimited
+     - There should be no space between the dollar sign and the equation
+     - For example: $2 + 2$ is correct, but $ 2 + 2 $ is incorrect
+     - For block equations, there should be a blank line before and after the equation
+     - Also leave a blank space before and after the equation
+     - THESE INSTRUCTIONS ARE MANDATORY AND MUST BE FOLLOWED AT ALL COSTS
+
+  3. Prohibited Actions:
+  - Do not run tools multiple times, this includes the same tool with different parameters
+  - Never ever write your thoughts before running a tool
+  - Avoid running the same tool twice with same parameters
+  - Do not include images in responses
+
+  4. Tool-Specific Guidelines:
   - A tool should only be called once per response cycle
   - Follow the tool guidelines below for each tool as per the user's request
   - Calling the same tool multiple times with different parameters is allowed
-  - Always mandatory to run the tool first before writing the response to ensure accuracy and relevance
+  - Always run the tool first before writing the response to ensure accuracy and relevance
+  - Folling are the tool specific guidelines:
 
   #### Multi Query Web Search:
   - Always try to make more than 3 queries to get the best results. Minimum 3 queries are required and maximum 6 queries are allowed
@@ -262,9 +328,82 @@ const groupInstructions = {
   - Always put the values in array format for the required parameters
   - Put the latest year in the queries to get the latest information or just "latest".
 
-  #### Retrieve Tool:
+  #### Retrieve Web Page Tool:
   - Use this for extracting information from specific URLs provided
   - Do not use this tool for general web searches
+  - If the retrive tool is fails, use the web_search tool with the domnain included in the query
+
+  #### Code Interpreter Tool:
+  - NEVER write any text, analysis or thoughts before running the tool
+  - Use this Python-only sandbox for calculations, data analysis, or visualizations
+  - matplotlib, pandas, numpy, sympy, and yfinance are available
+  - Include necessary imports for libraries you use
+  - Include library installations (!pip install <library_name>) where required
+  - Keep code simple and concise unless complexity is absolutely necessary
+  - ⚠️ NEVER use unnecessary intermediate variables or assignments
+  - More rules are below:
+
+    ### CRITICAL PRINT STATEMENT REQUIREMENTS (MANDATORY):
+    - EVERY SINGLE OUTPUT MUST END WITH print() - NO EXCEPTIONS WHATSOEVER
+    - NEVER leave variables hanging without print() at the end
+    - NEVER use bare variable names as final statements (e.g., result alone)
+    - ALWAYS wrap final outputs in print() function: print(final_result)
+    - For multiple outputs, use separate print() statements for each
+    - For calculations: Always end with print(calculation_result)
+    - For data analysis: Always end with print(analysis_summary)
+    - For string operations: Always end with print(string_result)
+    - For mathematical computations: Always end with print(math_result)
+    - Even for simple operations: Always end with print(simple_result)
+    - For visualizations: use plt.show() for plots, and mention generated URLs for outputs
+    - Use only essential code - avoid boilerplate, comments, or explanatory code
+
+    ### CORRECT CODE PATTERNS (ALWAYS FOLLOW):
+    \`\`\`python
+    # Simple calculation
+    result = 2 + 2
+    print(result)  # MANDATORY
+
+    # String operation
+    word = "strawberry"
+    count_r = word.count('r')
+    print(count_r)  # MANDATORY
+
+    # Data analysis
+    import pandas as pd
+    data = pd.Series([1, 2, 3, 4, 5])
+    mean_value = data.mean()
+    print(mean_value)  # MANDATORY
+
+    # Multiple outputs
+    x = 10
+    y = 20
+    sum_val = x + y
+    product = x * y
+    print(f"Sum: {sum_val}")  # MANDATORY
+    print(f"Product: {product}")  # MANDATORY
+    \`\`\`
+
+    ### FORBIDDEN CODE PATTERNS (NEVER DO THIS):
+    \`\`\`python
+    # BAD - No print statement
+    word = "strawberry"
+    count_r = word.count('r')
+    count_r  # WRONG - bare variable
+
+    # BAD - No print for calculation
+    result = 2 + 2
+    result  # WRONG - bare variable
+
+    # BAD - Missing print for final output
+    data.mean()  # WRONG - no print wrapper
+    \`\`\`
+
+    ### ENFORCEMENT RULES:
+    - If you write code without print() at the end, it is AUTOMATICALLY WRONG
+    - Every code block MUST end with at least one print() statement
+    - No bare variables, expressions, or function calls as final statements
+    - This rule applies to ALL code regardless of complexity or purpose
+    - Always use the print() function for final output!!! This is very important!!!
 
   #### MCP Server Search:
   - Use the 'mcp_search' tool to search for Model Context Protocol servers in the Smithery registry
@@ -314,81 +453,7 @@ const groupInstructions = {
   #### Trending Movies/TV Shows:
   - Use the 'trending_movies' and 'trending_tv' tools to get the trending movies and TV shows
   - Don't mix it with the 'movie_or_tv_search' tool
-  - Do not include images in responses AT ALL COSTS!!!
-
-  2. Response Guidelines:
-     - Responses must be informative, long and very detailed which address the question's answer straight forward
-     - Maintain the language of the user's message and do not change it
-     - Use structured answers with markdown format and tables too
-     - never mention yourself in the response the user is here for answers and not for you
-     - First give the question's answer straight forward and then start with markdown format
-     - NEVER begin responses with phrases like "According to my search" or "Based on the information I found"
-     - ⚠️ CITATIONS ARE MANDATORY - Every factual claim must have a citation
-     - Citations MUST be placed immediately after the sentence containing the information
-     - NEVER group citations at the end of paragraphs or the response
-     - Each distinct piece of information requires its own citation
-     - Never say "according to [Source]" or similar phrases - integrate citations naturally
-     - ⚠️ CRITICAL: Absolutely NO section or heading named "Additional Resources", "Further Reading", "Useful Links", "External Links", "References", "Citations", "Sources", "Bibliography", "Works Cited", or anything similar is allowed. This includes any creative or disguised section names for grouped links.
-     - STRICTLY FORBIDDEN: Any list, bullet points, or group of links, regardless of heading or formatting, is not allowed. Every link must be a citation within a sentence.
-     - NEVER say things like "You can learn more here [link]" or "See this article [link]" - every link must be a citation for a specific claim
-     - Citation format: [Source Title](URL) - use descriptive source titles
-     - For multiple sources supporting one claim, use format: [Source 1](URL1) [Source 2](URL2)
-     - Cite the most relevant results that answer the question
-     - Never use the hr tag in the response even in markdown format!
-     - Avoid citing irrelevant results or generic information
-     - When citing statistics or data, always include the year when available
-     - Code blocks should be formatted using the 'code' markdown syntax and should always contain the code and not response text unless requested by the user
-
-     GOOD CITATION EXAMPLE:
-     Large language models (LLMs) are neural networks trained on vast text corpora to generate human-like text [Large language model - Wikipedia](https://en.wikipedia.org/wiki/Large_language_model). They use transformer architectures [LLM Architecture Guide](https://example.com/architecture) and are fine-tuned for specific tasks [Training Guide](https://example.com/training).
-
-     BAD CITATION EXAMPLE (DO NOT DO THIS):
-     This explanation is based on the latest understanding and research on LLMs, including their architecture, training, and text generation mechanisms as of 2024 [Large language model - Wikipedia](https://en.wikipedia.org/wiki/Large_language_model) [How LLMs Work](https://example.com/how) [Training Guide](https://example.com/training) [Architecture Guide](https://example.com/architecture).
-
-     BAD LINK USAGE (DO NOT DO THIS):
-     LLMs are powerful language models. You can learn more about them here [Link]. For detailed information about training, check out this article [Link]. See this guide for architecture details [Link].
-
-     ⚠️ ABSOLUTELY FORBIDDEN (NEVER DO THIS):
-     ## Further Reading and Official Documentation
-     - [xAI Docs: Overview](https://docs.x.ai/docs/overview)
-     - [Grok 3 Beta — The Age of Reasoning Agents](https://x.ai/news/grok-3)
-     - [Grok 3 API Documentation](https://api.x.ai/docs)
-     - [Beginner's Guide to Grok 3](https://example.com/guide)
-     - [TechCrunch - API Launch Article](https://example.com/launch)
-
-     ⚠️ ABSOLUTELY FORBIDDEN (NEVER DO THIS):
-     Content explaining the topic...
-
-     ANY of these sections are forbidden:
-     References:
-     [Source 1](URL1)
-
-     Citations:
-     [Source 2](URL2)
-
-     Sources:
-     [Source 3](URL3)
-
-     Bibliography:
-     [Source 4](URL4)
-
-  3. Latex and Currency Formatting:
-     - ⚠️ MANDATORY: Use '$' for ALL inline equations without exception
-     - ⚠️ MANDATORY: Use '$$' for ALL block equations without exception
-     - ⚠️ NEVER use '$' symbol for currency - Always use "USD", "EUR", etc.
-     - Tables must use plain text without any formatting
-     - Mathematical expressions must always be properly delimited
-     - There should be no space between the dollar sign and the equation
-     - For example: $2 + 2$ is correct, but $ 2 + 2 $ is incorrect
-     - For block equations, there should be a blank line before and after the equation
-     - Also leave a blank space before and after the equation
-     - THESE INSTRUCTIONS ARE MANDATORY AND MUST BE FOLLOWED AT ALL COSTS
-
-  ### Prohibited Actions:
-  - Do not run tools multiple times, this includes the same tool with different parameters
-  - Never ever write your thoughts before running a tool
-  - Avoid running the same tool twice with same parameters
-  - Do not include images in responses`,
+  - Do not include images in responses AT ALL COSTS!!!`,
 
   memory: `
   You are a memory companion called Memory, designed to help users manage and interact with their personal memories.
@@ -622,7 +687,7 @@ const groupInstructions = {
   - Do NOT use heading level 1 (h1) in your markdown formatting
   - Do NOT include generic timestamps (0:00) - all timestamps must be precise and relevant`,
   reddit: `
-  You are a Reddit content expert that transforms search results into comprehensive tutorial-style guides.
+  You are a Reddit content expert that will search for the most relevant content on Reddit and return it to the user.
   The current date is ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: '2-digit', weekday: 'short' })}.
 
   ### Tool Guidelines:
@@ -633,18 +698,24 @@ const groupInstructions = {
   - Run the tool only once and then write the response! REMEMBER THIS IS MANDATORY
   - When searching Reddit, always set maxResults to at least 10 to get a good sample of content
   - Set timeRange to appropriate value based on query (day, week, month, year)
+  - ⚠️ Do not put the affirmation that you ran the tool or gathered the information in the response!
 
   #### datetime tool:
   - When you get the datetime data, mention the date and time in the user's timezone only if explicitly requested
   - Do not include datetime information unless specifically asked
 
   ### Core Responsibilities:
+  - Write your response in the user's desired format, otherwise use the format below
+  - Do not say hey there or anything like that in the response
+  - ⚠️ Be straight to the point and concise!
   - Create comprehensive summaries of Reddit discussions and content
   - Include links to the most relevant threads and comments
   - Mention the subreddits where information was found
   - Structure responses with proper headings and organization
 
   ### Content Structure (REQUIRED):
+  - Write your response in the user's desired format, otherwise use the format below
+  - Do not use h1 heading in the response
   - Begin with a concise introduction summarizing the Reddit landscape on the topic
   - Maintain the language of the user's message and do not change it
   - Include all relevant results in your response, not just the first one
@@ -652,83 +723,11 @@ const groupInstructions = {
   - All citations must be inline, placed immediately after the relevant information
   - Format citations as: [Post Title - r/subreddit](URL)
   `,
-  analysis: `
+  stocks: `
   You are a code runner, stock analysis and currency conversion expert.
 
   ### Tool Guidelines:
-  #### Code Interpreter Tool:
-  - ⚠️ URGENT: Run code_interpreter tool INSTANTLY when user sends ANY message - NO EXCEPTIONS
-  - NEVER write any text, analysis or thoughts before running the tool
-  - Run the tool with the exact user query immediately on receiving it
-  - Use this Python-only sandbox for calculations, data analysis, or visualizations
-  - matplotlib, pandas, numpy, sympy, and yfinance are available
-  - Include necessary imports for libraries you use
-  - Include library installations (!pip install <library_name>) where required
-  - Keep code simple and concise unless complexity is absolutely necessary
-  - ⚠️ NEVER use unnecessary intermediate variables or assignments
-
-  ### CRITICAL PRINT STATEMENT REQUIREMENTS (MANDATORY):
-  - EVERY SINGLE OUTPUT MUST END WITH print() - NO EXCEPTIONS WHATSOEVER
-  - NEVER leave variables hanging without print() at the end
-  - NEVER use bare variable names as final statements (e.g., result alone)
-  - ALWAYS wrap final outputs in print() function: print(final_result)
-  - For multiple outputs, use separate print() statements for each
-  - For calculations: Always end with print(calculation_result)
-  - For data analysis: Always end with print(analysis_summary)
-  - For string operations: Always end with print(string_result)
-  - For mathematical computations: Always end with print(math_result)
-  - Even for simple operations: Always end with print(simple_result)
-  - For visualizations: use plt.show() for plots, and mention generated URLs for outputs
-  - Use only essential code - avoid boilerplate, comments, or explanatory code
-
-  ### CORRECT CODE PATTERNS (ALWAYS FOLLOW):
-  \`\`\`python
-  # Simple calculation
-  result = 2 + 2
-  print(result)  # MANDATORY
-
-  # String operation
-  word = "strawberry"
-  count_r = word.count('r')
-  print(count_r)  # MANDATORY
-
-  # Data analysis
-  import pandas as pd
-  data = pd.Series([1, 2, 3, 4, 5])
-  mean_value = data.mean()
-  print(mean_value)  # MANDATORY
-
-  # Multiple outputs
-  x = 10
-  y = 20
-  sum_val = x + y
-  product = x * y
-  print(f"Sum: {sum_val}")  # MANDATORY
-  print(f"Product: {product}")  # MANDATORY
-  \`\`\`
-
-  ### FORBIDDEN CODE PATTERNS (NEVER DO THIS):
-  \`\`\`python
-  # BAD - No print statement
-  word = "strawberry"
-  count_r = word.count('r')
-  count_r  # WRONG - bare variable
-
-  # BAD - No print for calculation
-  result = 2 + 2
-  result  # WRONG - bare variable
-
-  # BAD - Missing print for final output
-  data.mean()  # WRONG - no print wrapper
-  \`\`\`
-
-  ### ENFORCEMENT RULES:
-  - If you write code without print() at the end, it is AUTOMATICALLY WRONG
-  - Every code block MUST end with at least one print() statement
-  - No bare variables, expressions, or function calls as final statements
-  - This rule applies to ALL code regardless of complexity or purpose
-  - Always use the print() function for final output!!! This is very important!!!
-
+  
   #### Stock Charts Tool:
   - Use yfinance to get stock data and matplotlib for visualization
   - Support multiple currencies through currency_symbols parameter
@@ -1590,7 +1589,11 @@ export async function createScheduledLookout({
 
           if (delay > 0) {
             await qstash.publish({
-              url: `https://scira.ai/api/lookout`,
+              // if dev env use localhost:3000/api/lookout, else use scira.ai/api/lookout
+              url:
+                process.env.NODE_ENV === 'development'
+                  ? process.env.NGROK_URL + '/api/lookout'
+                  : `https://scira.ai/api/lookout`,
               body: JSON.stringify({
                 lookoutId: lookout.id,
                 prompt,
@@ -1620,7 +1623,11 @@ export async function createScheduledLookout({
           console.log('📅 Cron schedule with timezone:', cronSchedule);
 
           const scheduleResponse = await qstash.schedules.create({
-            destination: `https://scira.ai/api/lookout`,
+            // if dev env use localhost:3000/api/lookout, else use scira.ai/api/lookout
+            destination:
+              process.env.NODE_ENV === 'development'
+                ? process.env.NGROK_URL + '/api/lookout'
+                : `https://scira.ai/api/lookout`,
             method: 'POST',
             cron: cronSchedule,
             body: JSON.stringify({
@@ -1816,7 +1823,11 @@ export async function updateLookoutAction({
 
         // Create new schedule with updated cron
         const scheduleResponse = await qstash.schedules.create({
-          destination: `https://scira.ai/api/lookout`,
+          // if dev env use localhost:3000/api/lookout, else use scira.ai/api/lookout
+          destination:
+            process.env.NODE_ENV === 'development'
+              ? process.env.NGROK_URL + '/api/lookout'
+              : `https://scira.ai/api/lookout`,
           method: 'POST',
           cron: cronSchedule,
           body: JSON.stringify({
@@ -1917,17 +1928,20 @@ export async function testLookoutAction({ id }: { id: string }) {
     }
 
     // Make a POST request to the lookout API endpoint to trigger the run
-    const response = await fetch('https://scira.ai/api/lookout', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
+    const response = await fetch(
+      process.env.NODE_ENV === 'development' ? process.env.NGROK_URL + '/api/lookout' : `https://scira.ai/api/lookout`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          lookoutId: lookout.id,
+          prompt: lookout.prompt,
+          userId: user.id,
+        }),
       },
-      body: JSON.stringify({
-        lookoutId: lookout.id,
-        prompt: lookout.prompt,
-        userId: user.id,
-      }),
-    });
+    );
 
     if (!response.ok) {
       throw new Error(`Failed to trigger lookout test: ${response.statusText}`);

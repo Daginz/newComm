@@ -1,7 +1,7 @@
 // /lib/utils.ts
 import { type ClassValue, clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import { GlobalSearchIcon, Database02Icon, CodeIcon, AtomicPowerIcon, Bitcoin02Icon, MicroscopeIcon, NewTwitterIcon, RedditIcon, YoutubeIcon, ChattingIcon } from '@hugeicons/core-free-icons';
+import { GlobalSearchIcon, Database02Icon, AtomicPowerIcon, Bitcoin02Icon, MicroscopeIcon, NewTwitterIcon, RedditIcon, YoutubeIcon, ChattingIcon, AppleStocksIcon } from '@hugeicons/core-free-icons';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -13,7 +13,7 @@ export type SearchGroupId =
   | 'academic'
   | 'youtube'
   | 'reddit'
-  | 'analysis'
+  | 'stocks'
   | 'chat'
   | 'extreme'
   | 'memory'
@@ -28,39 +28,17 @@ export const searchGroups = [
     show: true,
   },
   {
-    id: 'memory' as const,
-    name: 'Memory',
-    description: 'Your personal memory companion',
-    icon: Database02Icon,
-    show: true,
-    requireAuth: true,
-  },
-  {
-    id: 'analysis' as const,
-    name: 'Analysis',
-    description: 'Code, stock and currency stuff',
-    icon: CodeIcon,
-    show: true,
-  },
-  {
-    id: 'crypto' as const,
-    name: 'Crypto',
-    description: 'Cryptocurrency research powered by CoinGecko',
-    icon: Bitcoin02Icon,
-    show: true,
-  },
-  {
-    id: 'chat' as const,
-    name: 'Chat',
-    description: 'Talk to the model directly.',
-    icon: ChattingIcon,
-    show: true,
-  },
-  {
     id: 'x' as const,
     name: 'X',
     description: 'Search X posts',
     icon: NewTwitterIcon,
+    show: true,
+  },
+  {
+    id: 'stocks' as const,
+    name: 'Stocks',
+    description: 'Stock and currency information',
+    icon: AppleStocksIcon,
     show: true,
   },
   {
@@ -75,6 +53,28 @@ export const searchGroups = [
     name: 'Academic',
     description: 'Search academic papers powered by Exa',
     icon: MicroscopeIcon,
+    show: true,
+  },
+  {
+    id: 'chat' as const,
+    name: 'Chat',
+    description: 'Talk to the model directly.',
+    icon: ChattingIcon,
+    show: true,
+  },
+  {
+    id: 'memory' as const,
+    name: 'Memory',
+    description: 'Your personal memory companion',
+    icon: Database02Icon,
+    show: true,
+    requireAuth: true,
+  },
+  {
+    id: 'crypto' as const,
+    name: 'Crypto',
+    description: 'Cryptocurrency research powered by CoinGecko',
+    icon: Bitcoin02Icon,
     show: true,
   },
   {

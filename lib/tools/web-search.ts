@@ -2,7 +2,8 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import Exa from 'exa-js';
 import { serverEnv } from '@/env/server';
-import { DataStreamWriter } from 'ai';
+import { UIMessageStreamWriter } from 'ai';
+import { ChatMessage } from '../types';
 
 const extractDomain = (url: string): string => {
   const urlPattern = /^https?:\/\/([^/?#]+)(?:[/?#]|$)/i;
@@ -43,10 +44,10 @@ const processDomains = (domains?: string[]): string[] | undefined => {
   return processedDomains.every((domain) => domain.trim() === '') ? undefined : processedDomains;
 };
 
-export const webSearchTool = (dataStream: DataStreamWriter) =>
-  tool({
-    description: 'Search the web for information with 5-10 queries, max results and search depth.',
-    parameters: z.object({
+export function webSearchTool(dataStream?: UIMessageStreamWriter<ChatMessage> | undefined) {
+  return tool({
+    description: 'Search the web for information with 5-10 queries, max results, search depth, topics, and quality.',
+    inputSchema: z.object({
       queries: z.array(
         z.string().describe('Array of search queries to look up on the web. Default is 5 to 10 queries.'),
       ),
@@ -54,15 +55,15 @@ export const webSearchTool = (dataStream: DataStreamWriter) =>
         z.number().describe('Array of maximum number of results to return per query. Default is 10.'),
       ),
       topics: z.array(
-        z.enum(['general', 'news', 'finance']).describe('Array of topic types to search for. Default is general.'),
+        z.enum(['general', 'news', 'finance']).describe('Array of topic types to search for. Default is general. Other options are news and finance. No other options are available.'),
       ),
       quality: z.enum(['default', 'best']).describe('Search quality x speed level. Default is default.'),
       include_domains: z
         .array(z.string())
-        .describe('An array of domains to include in all search results. Default is an empty list.'),
+        .describe('An array of domains to include in all search results. Default is an empty list like []'),
       exclude_domains: z
         .array(z.string())
-        .describe('An array of domains to exclude from all search results. Default is an empty list.'),
+        .describe('An array of domains to exclude from all search results. Default is an empty list like []'),
     }),
     execute: async ({
       queries,
@@ -93,8 +94,8 @@ export const webSearchTool = (dataStream: DataStreamWriter) =>
         const currentMaxResults = maxResults[index] || maxResults[0] || 10;
 
         try {
-          dataStream.writeMessageAnnotation({
-            type: 'query_completion',
+          dataStream?.write({
+            type: 'data-query_completion',
             data: {
               query,
               index,
@@ -115,19 +116,27 @@ export const webSearchTool = (dataStream: DataStreamWriter) =>
           };
 
           const processedIncludeDomains = processDomains(include_domains);
-          if (processedIncludeDomains) {
-            searchOptions.includeDomains = processedIncludeDomains;
-          }
-
           const processedExcludeDomains = processDomains(exclude_domains);
-          if (processedExcludeDomains) {
+
+          const hasIncludeDomains = Array.isArray(processedIncludeDomains) && processedIncludeDomains.length > 0;
+          const hasExcludeDomains = Array.isArray(processedExcludeDomains) && processedExcludeDomains.length > 0;
+
+          if (hasIncludeDomains && hasExcludeDomains) {
+            // Prefer includeDomains when both are provided
+            searchOptions.includeDomains = processedIncludeDomains;
+            console.warn(
+              'Both include_domains and exclude_domains provided; prefer include_domains and ignore exclude_domains.'
+            );
+          } else if (hasIncludeDomains) {
+            searchOptions.includeDomains = processedIncludeDomains;
+          } else if (hasExcludeDomains) {
             searchOptions.excludeDomains = processedExcludeDomains;
           }
 
           const data = await exa.searchAndContents(query, searchOptions);
 
           const images: { url: string; description: string }[] = [];
-          const results = data.results.map((result: any) => {
+          const results = data.results.map((result) => {
             if (result.image) {
               images.push({
                 url: result.image,
@@ -144,8 +153,8 @@ export const webSearchTool = (dataStream: DataStreamWriter) =>
             };
           });
 
-          dataStream.writeMessageAnnotation({
-            type: 'query_completion',
+          dataStream?.write({
+            type: 'data-query_completion',
             data: {
               query,
               index,
@@ -164,8 +173,8 @@ export const webSearchTool = (dataStream: DataStreamWriter) =>
         } catch (error) {
           console.error(`Exa search error for query "${query}":`, error);
 
-          dataStream.writeMessageAnnotation({
-            type: 'query_completion',
+          dataStream?.write({
+            type: 'data-query_completion',
             data: {
               query,
               index,
@@ -191,3 +200,4 @@ export const webSearchTool = (dataStream: DataStreamWriter) =>
       };
     },
   });
+}
